@@ -19,11 +19,12 @@
 #include <binder/Parcel.h>
 #include <binder/IMemory.h>
 #include <cutils/log.h>
+#include <media/ICrypto.h>
 #include <media/stagefright/MediaErrors.h>
 #include <media/stagefright/foundation/ADebug.h>
 #include <media/stagefright/foundation/AString.h>
-#include <mediadrm/ICrypto.h>
 #include <utils/Log.h>
+#include <mediadrm/ICrypto.h>
 
 namespace android {
 
@@ -225,8 +226,13 @@ IMPLEMENT_META_INTERFACE(Crypto, "android.hardware.ICrypto");
 
 void BnCrypto::readVector(const Parcel &data, Vector<uint8_t> &vector) const {
     uint32_t size = data.readInt32();
-    vector.insertAt((size_t)0, size);
-    data.read(vector.editArray(), size);
+    if (vector.insertAt((size_t)0, size) < 0) {
+        vector.clear();
+    }
+    if (data.read(vector.editArray(), size) != NO_ERROR) {
+        vector.clear();
+        android_errorWriteWithInfoLog(0x534e4554, "62872384", -1, NULL, 0);
+    }
 }
 
 void BnCrypto::writeVector(Parcel *reply, Vector<uint8_t> const &vector) const {

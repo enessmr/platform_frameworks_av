@@ -541,6 +541,7 @@ bool HeifDecoderImpl::getScanlineInner(uint8_t* dst) {
         return false;
     }
     VideoFrame* videoFrame = static_cast<VideoFrame*>(mFrameMemory->pointer());
+    if (mCurScanline >= videoFrame->mHeight) {
     uint8_t* src = videoFrame->getFlattenedData() + videoFrame->mRowBytes * mCurScanline++;
     memcpy(dst, src, videoFrame->mBytesPerPixel * videoFrame->mWidth);
     return true;
@@ -551,24 +552,16 @@ bool HeifDecoderImpl::getScanline(uint8_t* dst) {
         ALOGE("no more scanline available");
         return false;
     }
-
-    if (mNumSlices > 1) {
-        Mutex::Autolock autolock(mLock);
-
-        while (!mAsyncDecodeDone && mCurScanline >= mAvailableLines) {
-            mScanlineReady.wait(mLock);
-        }
-        return (mCurScanline < mAvailableLines) ? getScanlineInner(dst) : false;
-    }
-
-    return getScanlineInner(dst);
+    uint8_t* src = videoFrame->getFlattenedData() + videoFrame->mRowBytes * mCurScanline++;
+    memcpy(dst, src, videoFrame->mBytesPerPixel * videoFrame->mWidth);
+    return true;
 }
 
 size_t HeifDecoderImpl::skipScanlines(size_t count) {
     uint32_t oldScanline = mCurScanline;
     mCurScanline += count;
-    if (mCurScanline > mHeight) {
-        mCurScanline = mHeight;
+    if (mCurScanline > videoFrame->mHeight) {
+        mCurScanline = videoFrame->mHeight;
     }
     return (mCurScanline > oldScanline) ? (mCurScanline - oldScanline) : 0;
 }

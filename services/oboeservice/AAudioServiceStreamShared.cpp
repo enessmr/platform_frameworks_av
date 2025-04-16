@@ -148,8 +148,8 @@ aaudio_result_t AAudioServiceStreamShared::open(const aaudio::AAudioStreamReques
     if (getSampleRate() == AAUDIO_UNSPECIFIED) {
         setSampleRate(endpoint->getSampleRate());
     } else if (getSampleRate() != endpoint->getSampleRate()) {
-        ALOGD("%s() mSampleRate = %d, need %d",
-              __func__, getSampleRate(), endpoint->getSampleRate());
+        ALOGE("AAudioServiceStreamShared::open() mSampleRate = %d, need %d",
+              getSampleRate(), endpoint->getSampleRate());
         result = AAUDIO_ERROR_INVALID_RATE;
         goto error;
     }
@@ -158,8 +158,8 @@ aaudio_result_t AAudioServiceStreamShared::open(const aaudio::AAudioStreamReques
     if (getSamplesPerFrame() == AAUDIO_UNSPECIFIED) {
         setSamplesPerFrame(endpoint->getSamplesPerFrame());
     } else if (getSamplesPerFrame() != endpoint->getSamplesPerFrame()) {
-        ALOGD("%s() mSamplesPerFrame = %d, need %d",
-              __func__, getSamplesPerFrame(), endpoint->getSamplesPerFrame());
+        ALOGE("AAudioServiceStreamShared::open() mSamplesPerFrame = %d, need %d",
+              getSamplesPerFrame(), endpoint->getSamplesPerFrame());
         result = AAUDIO_ERROR_OUT_OF_RANGE;
         goto error;
     }

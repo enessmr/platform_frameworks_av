@@ -592,6 +592,7 @@ MediaPlayerService::Client::~Client()
     }
     clearDeathNotifiers_l();
     mAudioDeviceUpdatedListener.clear();
+    clearDeathNotifiers_l();
 }
 
 void MediaPlayerService::Client::disconnect()
@@ -711,6 +712,7 @@ void MediaPlayerService::Client::AudioDeviceUpdatedNotifier::onAudioDeviceUpdate
 }
 
 void MediaPlayerService::Client::clearDeathNotifiers_l() {
+void MediaPlayerService::Client::clearDeathNotifiers_l() {
     if (mExtractorDeathListener != nullptr) {
         mExtractorDeathListener->unlinkToDeath();
         mExtractorDeathListener = nullptr;
@@ -742,21 +744,32 @@ sp<MediaPlayerBase> MediaPlayerService::Client::setDataSource_pre(
             new ServiceDeathNotifier(binder, p, MEDIAEXTRACTOR_PROCESS_DEATH);
     binder->linkToDeath(extractorDeathListener);
 
-    sp<IOmx> omx = IOmx::getService();
-    if (omx == nullptr) {
-        ALOGE("IOmx service is not available");
-        return NULL;
+    sp<ServiceDeathNotifier> codecDeathListener;
+    if (property_get_bool("persist.media.treble_omx", true)) {
+        // Treble IOmx
+        sp<IOmx> omx = IOmx::getService();
+        if (omx == nullptr) {
+            ALOGE("Treble IOmx not available");
+            return NULL;
+        }
+        codecDeathListener = new ServiceDeathNotifier(omx, p, MEDIACODEC_PROCESS_DEATH);
+        omx->linkToDeath(codecDeathListener, 0);
+    } else {
+        // Legacy IOMX
+        binder = sm->getService(String16("media.codec"));
+        if (binder == NULL) {
+            ALOGE("codec service not available");
+            return NULL;
+        }
+        codecDeathListener = new ServiceDeathNotifier(binder, p, MEDIACODEC_PROCESS_DEATH);
+        binder->linkToDeath(codecDeathListener);
     }
-    sp<ServiceDeathNotifier> codecDeathListener =
-            new ServiceDeathNotifier(omx, p, MEDIACODEC_PROCESS_DEATH);
-    omx->linkToDeath(codecDeathListener, 0);
 
     Mutex::Autolock lock(mLock);
 
     clearDeathNotifiers_l();
     mExtractorDeathListener = extractorDeathListener;
     mCodecDeathListener = codecDeathListener;
-    mAudioDeviceUpdatedListener = new AudioDeviceUpdatedNotifier(p);
 
     if (!p->hardwareOutput()) {
         mAudioOutput = new AudioOutput(mAudioSessionId, IPCThreadState::self()->getCallingUid(),

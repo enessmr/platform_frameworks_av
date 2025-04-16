@@ -228,7 +228,7 @@ aaudio_result_t AAudioServiceStreamBase::pause() {
     }
     result = endpoint->stopStream(this, mClientHandle);
     if (result != AAUDIO_OK) {
-        ALOGE("%s() mServiceEndpoint returned %d, %s", __func__, result, getTypeText());
+        ALOGE("AAudioServiceStreamShared::pause() mServiceEndpoint returned %d", result);
         disconnect(); // TODO should we return or pause Base first?
     }
 
@@ -242,8 +242,6 @@ aaudio_result_t AAudioServiceStreamBase::stop() {
     if (!isRunning()) {
         return result;
     }
-
-    setState(AAUDIO_STREAM_STATE_STOPPING);
 
     // Send it now because the timestamp gets rounded up when stopStream() is called below.
     // Also we don't need the timestamps while we are shutting down.

@@ -252,9 +252,13 @@ int32_t CryptoHal::setHeapBase(const sp<IMemoryHeap>& heap) {
     Mutex::Autolock autoLock(mLock);
 
     int32_t seqNum = mHeapSeqNum++;
-    sp<HidlMemory> hidlMemory = fromHeap(heap);
+
+    int fd = heap->getHeapID();
+    nativeHandle->data[0] = fd;
+    auto hidlHandle = hidl_handle(nativeHandle);
+    auto hidlMemory = hidl_memory("ashmem", hidlHandle, heap->getSize());
     mHeapBases.add(seqNum, HeapBase(mNextBufferId, heap->getSize()));
-    Return<void> hResult = mPlugin->setSharedBufferBase(*hidlMemory, mNextBufferId++);
+    Return<void> hResult = mPlugin->setSharedBufferBase(hidlMemory, mNextBufferId++);
     ALOGE_IF(!hResult.isOk(), "setSharedBufferBase(): remote call failed");
     return seqNum;
 }

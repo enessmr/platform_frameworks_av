@@ -367,14 +367,6 @@ class CameraDeviceBase : public virtual RefBase {
             const std::vector<sp<Surface>>& consumers, std::vector<int> *surfaceIds /*out*/) = 0;
 
     /**
-     * Update a given stream.
-     */
-    virtual status_t updateStream(int streamId, const std::vector<sp<Surface>> &newSurfaces,
-            const std::vector<android::camera3::OutputStreamInfo> &outputInfo,
-            const std::vector<size_t> &removedSurfaceIds,
-            KeyedVector<sp<Surface>, size_t> *outputMap/*out*/) = 0;
-
-    /**
      * Drop buffers for stream of streamId if dropping is true. If dropping is false, do not
      * drop buffers for stream of streamId.
      */

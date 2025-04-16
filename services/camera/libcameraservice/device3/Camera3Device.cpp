@@ -2152,40 +2152,6 @@ status_t Camera3Device::setConsumerSurfaces(int streamId,
     return OK;
 }
 
-status_t Camera3Device::updateStream(int streamId, const std::vector<sp<Surface>> &newSurfaces,
-        const std::vector<OutputStreamInfo> &outputInfo,
-        const std::vector<size_t> &removedSurfaceIds, KeyedVector<sp<Surface>, size_t> *outputMap) {
-    Mutex::Autolock il(mInterfaceLock);
-    Mutex::Autolock l(mLock);
-
-    ssize_t idx = mOutputStreams.indexOfKey(streamId);
-    if (idx == NAME_NOT_FOUND) {
-        CLOGE("Stream %d is unknown", streamId);
-        return idx;
-    }
-
-    for (const auto &it : removedSurfaceIds) {
-        if (mRequestThread->isOutputSurfacePending(streamId, it)) {
-            CLOGE("Shared surface still part of a pending request!");
-            return -EBUSY;
-        }
-    }
-
-    sp<Camera3OutputStreamInterface> stream = mOutputStreams[idx];
-    status_t res = stream->updateStream(newSurfaces, outputInfo, removedSurfaceIds, outputMap);
-    if (res != OK) {
-        CLOGE("Stream %d failed to update stream (error %d %s) ",
-              streamId, res, strerror(-res));
-        if (res == UNKNOWN_ERROR) {
-            SET_ERR_L("%s: Stream update failed to revert to previous output configuration!",
-                    __FUNCTION__);
-        }
-        return res;
-    }
-
-    return res;
-}
-
 status_t Camera3Device::dropStreamBuffers(bool dropping, int streamId) {
     Mutex::Autolock il(mInterfaceLock);
     Mutex::Autolock l(mLock);

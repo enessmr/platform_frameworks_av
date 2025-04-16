@@ -1032,7 +1032,22 @@ status_t BnAudioPolicyService::onTransact(
             CHECK_INTERFACE(IAudioPolicyService, data, reply);
             audio_stream_type_t stream =
                     static_cast <audio_stream_type_t>(data.readInt32());
-            audio_io_handle_t output = getOutput(stream);
+            uint32_t samplingRate = data.readInt32();
+            audio_format_t format = (audio_format_t) data.readInt32();
+            audio_channel_mask_t channelMask = data.readInt32();
+            audio_output_flags_t flags =
+                    static_cast <audio_output_flags_t>(data.readInt32());
+            bool hasOffloadInfo = data.readInt32() != 0;
+            audio_offload_info_t offloadInfo = {};
+            if (hasOffloadInfo) {
+                data.read(&offloadInfo, sizeof(audio_offload_info_t));
+            }
+            audio_io_handle_t output = getOutput(stream,
+                                                 samplingRate,
+                                                 format,
+                                                 channelMask,
+                                                 flags,
+                                                 hasOffloadInfo ? &offloadInfo : NULL);
             reply->writeInt32(static_cast <int>(output));
             return NO_ERROR;
         } break;

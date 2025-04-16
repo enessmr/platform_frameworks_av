@@ -806,11 +806,6 @@ status_t Camera3OutputStream::dropBuffers(bool dropping) {
     return OK;
 }
 
-const String8& Camera3OutputStream::getPhysicalCameraId() const {
-    Mutex::Autolock l(mLock);
-    return physicalCameraId();
-}
-
 status_t Camera3OutputStream::notifyBufferReleased(ANativeWindowBuffer* /*anwBuffer*/) {
     return OK;
 }

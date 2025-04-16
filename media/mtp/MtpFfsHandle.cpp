@@ -263,176 +263,165 @@ int MtpFfsHandle::handleControlRequest(const struct usb_ctrlrequest *setup) {
     return 0;
 }
 
-int MtpFfsHandle::start(bool ptp) {
-    if (!openEndpoints(ptp))
-        return -1;
+int MtpFfsHandle::writeHandle(int fd, const void* data, int len) {
+    LOG(VERBOSE) << "MTP about to write fd = " << fd << ", len=" << len;
+    int ret = 0;
+    const char* buf = static_cast<const char*>(data);
+    while (len > 0) {
+        int write_len = std::min(mMaxWrite, len);
+        int n = TEMP_FAILURE_RETRY(::write(fd, buf, write_len));
 
-    for (unsigned i = 0; i < NUM_IO_BUFS; i++) {
-        mIobuf[i].bufs.resize(MAX_FILE_CHUNK_SIZE);
-        mIobuf[i].iocb.resize(AIO_BUFS_MAX);
-        mIobuf[i].iocbs.resize(AIO_BUFS_MAX);
-        mIobuf[i].buf.resize(AIO_BUFS_MAX);
-        for (unsigned j = 0; j < AIO_BUFS_MAX; j++) {
-            mIobuf[i].buf[j] = mIobuf[i].bufs.data() + j * AIO_BUF_LEN;
-            mIobuf[i].iocb[j] = &mIobuf[i].iocbs[j];
+        if (n < 0) {
+            PLOG(ERROR) << "write ERROR: fd = " << fd << ", n = " << n;
+            return -1;
+        } else if (n < write_len) {
+            errno = EIO;
+            PLOG(ERROR) << "less written than expected";
+            return -1;
+        }
+        buf += n;
+        len -= n;
+        ret += n;
+    }
+    return ret;
+}
+
+int MtpFfsHandle::readHandle(int fd, void* data, int len) {
+    LOG(VERBOSE) << "MTP about to read fd = " << fd << ", len=" << len;
+    int ret = 0;
+    char* buf = static_cast<char*>(data);
+    while (len > 0) {
+        int read_len = std::min(mMaxRead, len);
+        int n = TEMP_FAILURE_RETRY(::read(fd, buf, read_len));
+        if (n < 0) {
+            PLOG(ERROR) << "read ERROR: fd = " << fd << ", n = " << n;
+            return -1;
+        }
+        ret += n;
+        if (n < read_len) // done reading early
+            break;
+        buf += n;
+        len -= n;
+    }
+    return ret;
+}
+
+int MtpFfsHandle::spliceReadHandle(int fd, int pipe_out, int len) {
+    LOG(VERBOSE) << "MTP about to splice read fd = " << fd << ", len=" << len;
+    int ret = 0;
+    loff_t dummyoff;
+    while (len > 0) {
+        int read_len = std::min(mMaxRead, len);
+        dummyoff = 0;
+        int n = TEMP_FAILURE_RETRY(splice(fd, &dummyoff, pipe_out, nullptr, read_len, 0));
+        if (n < 0) {
+            PLOG(ERROR) << "splice read ERROR: fd = " << fd << ", n = " << n;
+            return -1;
+        }
+        ret += n;
+        if (n < read_len) // done reading early
+            break;
+        len -= n;
+    }
+    return ret;
+}
+
+int MtpFfsHandle::read(void* data, int len) {
+    return readHandle(mBulkOut, data, len);
+}
+
+int MtpFfsHandle::write(const void* data, int len) {
+    return writeHandle(mBulkIn, data, len);
+}
+
+int MtpFfsHandle::start() {
+    mLock.lock();
+
+    mBulkIn.reset(TEMP_FAILURE_RETRY(open(FFS_MTP_EP_IN, O_RDWR)));
+    if (mBulkIn < 0) {
+        PLOG(ERROR) << FFS_MTP_EP_IN << ": cannot open bulk in ep";
+        return -1;
+    }
+
+    mBulkOut.reset(TEMP_FAILURE_RETRY(open(FFS_MTP_EP_OUT, O_RDWR)));
+    if (mBulkOut < 0) {
+        PLOG(ERROR) << FFS_MTP_EP_OUT << ": cannot open bulk out ep";
+        return -1;
+    }
+
+    mIntr.reset(TEMP_FAILURE_RETRY(open(FFS_MTP_EP_INTR, O_RDWR)));
+    if (mIntr < 0) {
+        PLOG(ERROR) << FFS_MTP_EP0 << ": cannot open intr ep";
+        return -1;
+    }
+
+    mBuffer1.resize(MAX_FILE_CHUNK_SIZE);
+    mBuffer2.resize(MAX_FILE_CHUNK_SIZE);
+    posix_madvise(mBuffer1.data(), MAX_FILE_CHUNK_SIZE,
+            POSIX_MADV_SEQUENTIAL | POSIX_MADV_WILLNEED);
+    posix_madvise(mBuffer2.data(), MAX_FILE_CHUNK_SIZE,
+            POSIX_MADV_SEQUENTIAL | POSIX_MADV_WILLNEED);
+
+    // Handle control requests.
+    std::thread t([this]() { this->controlLoop(); });
+    t.detach();
+
+    // Get device specific r/w size
+    mMaxWrite = android::base::GetIntProperty("sys.usb.ffs.max_write", USB_FFS_MAX_WRITE);
+    mMaxRead = android::base::GetIntProperty("sys.usb.ffs.max_read", USB_FFS_MAX_READ);
+
+    size_t attempts = 0;
+    while (mMaxWrite >= USB_FFS_MAX_WRITE && mMaxRead >= USB_FFS_MAX_READ &&
+            attempts < ENDPOINT_ALLOC_RETRIES) {
+        // If larger contiguous chunks of memory aren't available, attempt to try
+        // smaller allocations.
+        if (ioctl(mBulkIn, FUNCTIONFS_ENDPOINT_ALLOC, static_cast<__u32>(mMaxWrite)) ||
+            ioctl(mBulkOut, FUNCTIONFS_ENDPOINT_ALLOC, static_cast<__u32>(mMaxRead))) {
+            if (errno == ENODEV) {
+                // Driver hasn't enabled endpoints yet.
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                attempts += 1;
+                continue;
+            }
+            mMaxWrite /= 2;
+            mMaxRead /=2;
+        } else {
+            return 0;
         }
     }
-
-    memset(&mCtx, 0, sizeof(mCtx));
-    if (io_setup(AIO_BUFS_MAX, &mCtx) < 0) {
-        PLOG(ERROR) << "unable to setup aio";
-        return -1;
-    }
-    mEventFd.reset(eventfd(0, EFD_NONBLOCK));
-    mPollFds[0].fd = mControl;
-    mPollFds[0].events = POLLIN;
-    mPollFds[1].fd = mEventFd;
-    mPollFds[1].events = POLLIN;
-
-    mCanceled = false;
+    // Try to start MtpServer anyway, with the smallest max r/w values
+    PLOG(ERROR) << "Functionfs could not allocate any memory!";
     return 0;
 }
 
+int MtpFfsHandle::configure(bool usePtp) {
+    // Wait till previous server invocation has closed
+    if (!mLock.try_lock_for(std::chrono::milliseconds(300))) {
+        LOG(ERROR) << "MtpServer was unable to get configure lock";
+        return -1;
+    }
+    int ret = 0;
+
+    // If ptp is changed, the configuration must be rewritten
+    if (mPtp != usePtp) {
+        closeEndpoints();
+        closeConfig();
+    }
+    mPtp = usePtp;
+
+    if (!initFunctionfs()) {
+        ret = -1;
+    }
+    mLock.unlock();
+    return ret;
+}
+
 void MtpFfsHandle::close() {
-    io_destroy(mCtx);
     closeEndpoints();
-    closeConfig();
+    mLock.unlock();
 }
 
-int MtpFfsHandle::waitEvents(struct io_buffer *buf, int min_events, struct io_event *events,
-        int *counter) {
-    int num_events = 0;
-    int ret = 0;
-    int error = 0;
-
-    while (num_events < min_events) {
-        if (poll(mPollFds, 2, 0) == -1) {
-            PLOG(ERROR) << "Mtp error during poll()";
-            return -1;
-        }
-        if (mPollFds[0].revents & POLLIN) {
-            mPollFds[0].revents = 0;
-            if (handleEvent() == -1) {
-                error = errno;
-            }
-        }
-        if (mPollFds[1].revents & POLLIN) {
-            mPollFds[1].revents = 0;
-            uint64_t ev_cnt = 0;
-
-            if (::read(mEventFd, &ev_cnt, sizeof(ev_cnt)) == -1) {
-                PLOG(ERROR) << "Mtp unable to read eventfd";
-                error = errno;
-                continue;
-            }
-
-            // It's possible that io_getevents will return more events than the eventFd reported,
-            // since events may appear in the time between the calls. In this case, the eventFd will
-            // show up as readable next iteration, but there will be fewer or no events to actually
-            // wait for. Thus we never want io_getevents to block.
-            int this_events = TEMP_FAILURE_RETRY(io_getevents(mCtx, 0, AIO_BUFS_MAX, events, &ZERO_TIMEOUT));
-            if (this_events == -1) {
-                PLOG(ERROR) << "Mtp error getting events";
-                error = errno;
-            }
-            // Add up the total amount of data and find errors on the way.
-            for (unsigned j = 0; j < static_cast<unsigned>(this_events); j++) {
-                if (events[j].res < 0) {
-                    errno = -events[j].res;
-                    PLOG(ERROR) << "Mtp got error event at " << j << " and " << buf->actual << " total";
-                    error = errno;
-                }
-                ret += events[j].res;
-            }
-            num_events += this_events;
-            if (counter)
-                *counter += this_events;
-        }
-        if (error) {
-            errno = error;
-            ret = -1;
-            break;
-        }
-    }
-    return ret;
-}
-
-void MtpFfsHandle::cancelTransaction() {
-    // Device cancels by stalling both bulk endpoints.
-    if (::read(mBulkIn, nullptr, 0) != -1 || errno != EBADMSG)
-        PLOG(ERROR) << "Mtp stall failed on bulk in";
-    if (::write(mBulkOut, nullptr, 0) != -1 || errno != EBADMSG)
-        PLOG(ERROR) << "Mtp stall failed on bulk out";
-    mCanceled = true;
-    errno = ECANCELED;
-}
-
-int MtpFfsHandle::cancelEvents(struct iocb **iocb, struct io_event *events, unsigned start,
-        unsigned end) {
-    // Some manpages for io_cancel are out of date and incorrect.
-    // io_cancel will return -EINPROGRESS on success and does
-    // not place the event in the given memory. We have to use
-    // io_getevents to wait for all the events we cancelled.
-    int ret = 0;
-    unsigned num_events = 0;
-    int save_errno = errno;
-    errno = 0;
-
-    for (unsigned j = start; j < end; j++) {
-        if (io_cancel(mCtx, iocb[j], nullptr) != -1 || errno != EINPROGRESS) {
-            PLOG(ERROR) << "Mtp couldn't cancel request " << j;
-        } else {
-            num_events++;
-        }
-    }
-    if (num_events != end - start) {
-        ret = -1;
-        errno = EIO;
-    }
-    int evs = TEMP_FAILURE_RETRY(io_getevents(mCtx, num_events, AIO_BUFS_MAX, events, nullptr));
-    if (static_cast<unsigned>(evs) != num_events) {
-        PLOG(ERROR) << "Mtp couldn't cancel all requests, got " << evs;
-        ret = -1;
-    }
-
-    uint64_t ev_cnt = 0;
-    if (num_events && ::read(mEventFd, &ev_cnt, sizeof(ev_cnt)) == -1)
-        PLOG(ERROR) << "Mtp Unable to read event fd";
-
-    if (ret == 0) {
-        // Restore errno since it probably got overriden with EINPROGRESS.
-        errno = save_errno;
-    }
-    return ret;
-}
-
-int MtpFfsHandle::iobufSubmit(struct io_buffer *buf, int fd, unsigned length, bool read) {
-    int ret = 0;
-    buf->actual = AIO_BUFS_MAX;
-    for (unsigned j = 0; j < AIO_BUFS_MAX; j++) {
-        unsigned rq_length = std::min(AIO_BUF_LEN, length - AIO_BUF_LEN * j);
-        io_prep(buf->iocb[j], fd, buf->buf[j], rq_length, 0, read);
-        buf->iocb[j]->aio_flags |= IOCB_FLAG_RESFD;
-        buf->iocb[j]->aio_resfd = mEventFd;
-
-        // Not enough data, so table is truncated.
-        if (rq_length < AIO_BUF_LEN || length == AIO_BUF_LEN * (j + 1)) {
-            buf->actual = j + 1;
-            break;
-        }
-    }
-
-    ret = io_submit(mCtx, buf->actual, buf->iocb.data());
-    if (ret != static_cast<int>(buf->actual)) {
-        PLOG(ERROR) << "Mtp io_submit got " << ret << " expected " << buf->actual;
-        if (ret != -1) {
-            errno = EIO;
-        }
-        ret = -1;
-    }
-    return ret;
-}
-
+/* Read from USB and write to a local file. */
 int MtpFfsHandle::receiveFile(mtp_file_range mfr, bool zero_packet) {
     // When receiving files, the incoming length is given in 32 bits.
     // A >=4G file is given as 0xFFFFFFFF

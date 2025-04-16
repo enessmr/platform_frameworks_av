@@ -63,11 +63,6 @@ class Camera3DummyStream :
     virtual status_t dropBuffers(bool /*dropping*/) override;
 
     /**
-     * Query the physical camera id for the output stream.
-     */
-    virtual const String8& getPhysicalCameraId() const override;
-
-    /**
      * Return if this output stream is for video encoding.
      */
     bool isVideoStream() const;
